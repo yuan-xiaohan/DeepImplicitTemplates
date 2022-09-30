@@ -2,6 +2,7 @@
 # Copyright 2004-present Facebook. All Rights Reserved.
 
 import argparse
+import sys
 import json
 import numpy as np
 import os
@@ -89,6 +90,9 @@ if __name__ == "__main__":
         help="The checkpoint weights to use. This can be a number indicated an epoch "
         + "or 'latest' for the latest weights (this is the default)",
     )
+    sys.argv = [r"generate_template_mesh.py",
+                "--experiment", r"examples\cardiac",
+                ]
     deep_sdf.add_common_args(arg_parser)
 
     args = arg_parser.parse_args()

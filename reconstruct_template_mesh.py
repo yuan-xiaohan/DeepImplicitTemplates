@@ -206,6 +206,7 @@ if __name__ == "__main__":
     latent_size = specs["CodeLength"]
 
     decoder = arch.Decoder(latent_size, **specs["NetworkSpecs"])
+    # decoder = arch.Decoder_GetTemplate(specs["NetworkSpecs"]["decoder_kargs"])
 
     decoder = torch.nn.DataParallel(decoder)
 
@@ -223,7 +224,7 @@ if __name__ == "__main__":
     with open(args.split_filename, "r") as f:
         split = json.load(f)
 
-    npz_filenames, normalizationfiles = deep_sdf.data.get_instance_filenames(args.data_source, split)
+    npz_filenames = deep_sdf.data.get_instance_filenames(args.data_source, split)
 
     # random.shuffle(npz_filenames)
     npz_filenames = sorted(npz_filenames)
@@ -268,94 +269,5 @@ if __name__ == "__main__":
         latent = None
         with torch.no_grad():
             deep_sdf.mesh.create_mesh(
-                decoder.forward_template, latent, template_filename, N=args.resolution, max_batch=int(2 ** 17),
+                decoder, latent, template_filename, N=args.resolution, max_batch=int(2 ** 17),
             )
-
-    for ii, npz in enumerate(npz_filenames):
-
-        if "npz" not in npz:
-            continue
-
-        full_filename = os.path.join(args.data_source, ws.sdf_samples_subdir, npz)
-        normalization_params_filename = normalizationfiles[ii]
-        normalization_params = np.load(normalization_params_filename)
-
-        logging.debug("loading {}".format(npz))
-
-        data_sdf = deep_sdf.data.read_sdf_samples_into_ram(full_filename)
-
-        for k in range(repeat):
-
-            if rerun > 1:
-                mesh_filename = os.path.join(
-                    reconstruction_meshes_dir, npz[:-4] + "-" + str(k + rerun)
-                )
-                latent_filename = os.path.join(
-                    reconstruction_codes_dir, npz[:-4] + "-" + str(k + rerun) + ".pth"
-                )
-            else:
-                mesh_filename = os.path.join(reconstruction_meshes_dir, npz[:-4])
-                latent_filename = os.path.join(
-                    reconstruction_codes_dir, npz[:-4] + ".pth"
-                )
-
-            if (
-                args.skip
-                and os.path.isfile(mesh_filename + ".ply")
-                and os.path.isfile(latent_filename)
-            ):
-                continue
-
-            logging.info("reconstructing {}".format(npz))
-
-            data_sdf[0] = data_sdf[0][torch.randperm(data_sdf[0].shape[0])]
-            data_sdf[1] = data_sdf[1][torch.randperm(data_sdf[1].shape[0])]
-
-            start = time.time()
-            if not os.path.isfile(latent_filename):
-                err, latent = reconstruct(
-                    decoder,
-                    int(args.iterations),
-                    latent_size,
-                    data_sdf,
-                    0.01,  # [emp_mean,emp_var],
-                    0.1,
-                    num_samples=8000,
-                    lr=5e-3,
-                    l2reg=True,
-                )
-                logging.info("reconstruct time: {}".format(time.time() - start))
-                logging.info("reconstruction error: {}".format(err))
-                err_sum += err
-                # logging.info("current_error avg: {}".format((err_sum / (ii + 1))))
-                # logging.debug(ii)
-
-                # logging.debug("latent: {}".format(latent.detach().cpu().numpy()))
-            else:
-                logging.info("loading from " + latent_filename)
-                latent = torch.load(latent_filename).squeeze(0)
-
-            decoder.eval()
-
-            if not os.path.exists(os.path.dirname(mesh_filename)):
-                os.makedirs(os.path.dirname(mesh_filename))
-
-            if not save_latvec_only:
-                start = time.time()
-                with torch.no_grad():
-                    if args.use_octree:
-                        deep_sdf.mesh.create_mesh_octree(
-                            decoder, latent, mesh_filename, N=args.resolution, max_batch=int(2 ** 17),
-                            clamp_func=clamping_function
-                        )
-                    else:
-                        deep_sdf.mesh.create_mesh(
-                            decoder, latent, mesh_filename, N=args.resolution, max_batch=int(2 ** 17),
-                            offset=normalization_params["offset"], scale=normalization_params["scale"]
-                        )
-                logging.debug("total time: {}".format(time.time() - start))
-
-            if not os.path.exists(os.path.dirname(latent_filename)):
-                os.makedirs(os.path.dirname(latent_filename))
-
-            torch.save(latent.unsqueeze(0), latent_filename)

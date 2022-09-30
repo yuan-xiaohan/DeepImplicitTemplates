@@ -54,6 +54,7 @@ def decode_sdf(decoder, latent_vector, queries):
     if latent_vector is None:
         inputs = queries
         sdf = decoder(inputs)[:, :1]
+        # sdf = decoder.forward_template(queries)[:, :1]
     else:
         try:
             latent_repeat = latent_vector.expand(num_samples, -1)

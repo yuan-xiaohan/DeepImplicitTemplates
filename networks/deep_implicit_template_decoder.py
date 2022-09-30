@@ -156,14 +156,17 @@ class Warper(nn.Module):
 
         warped_xyzs = []
         for s in range(self.steps):
-            state = self.lstm(torch.cat([code, xyz], dim=1), states[-1])
+            # states[-1]: state at last step
+            state = self.lstm(torch.cat([code, xyz], dim=1), states[-1])  # tuple:2 [num, 512]
             if state[0].requires_grad:
                 state[0].register_hook(lambda x: x.clamp(min=-10, max=10))
-            a = self.out_layer_coord_affine(state[0])
+            a = self.out_layer_coord_affine(state[0])  # tuple:2 [num, 6]
+            # tmp_xyz = beta + (1 + alpha) * xyz
             tmp_xyz = torch.addcmul(a[:, 3:], (1 + a[:, :3]), xyz)
 
             warping_param.append(a)
             states.append(state)
+            # when s+1 = 2, 4, 6, 8, record the warped_xyzs for compute Progressive Reconstruction Loss
             if (s+1) % (self.steps // 4) == 0:
                 warped_xyzs.append(tmp_xyz)
             xyz = tmp_xyz
@@ -183,6 +186,7 @@ class Decoder(nn.Module):
 
     def forward(self, input, output_warped_points=False, output_warping_param=False,
                 step=1.0):
+        # p_final: [num_sdf_samples, 3], warping_param: list:8 [num_sdf_samples, 6], warped_xyzs: list:4 [num_sdf_samples, 3]
         p_final, warping_param, warped_xyzs = self.warper(input, step=step)
 
         if not self.training:
@@ -198,7 +202,7 @@ class Decoder(nn.Module):
                 else:
                     return x
         else:   # training mode, output intermediate positions and their corresponding sdf prediction
-            xs = []
+            xs = []  # list:4 [num_sdf_samples, 1], for each warped_xyzs
             for p in warped_xyzs:
                 xs.append(self.sdf_decoder(p))
             if output_warped_points:

@@ -10,6 +10,8 @@ import random
 import time
 import torch
 import numpy as np
+import trimesh
+from mesh_to_sdf.mesh_to_sdf import ComputeNormalizationParameters
 
 import deep_sdf
 import deep_sdf.workspace as ws
@@ -51,9 +53,8 @@ def reconstruct(
     for e in range(num_iterations):
 
         decoder.eval()
-        sdf_data = deep_sdf.data.unpack_sdf_samples_from_ram(
-            test_sdf, num_samples
-        ).cuda()
+        randidx = torch.randperm(test_sdf.shape[0])
+        sdf_data = torch.index_select(test_sdf, 0, randidx).cuda()
         xyz = sdf_data[:, 0:3]
         sdf_gt = sdf_data[:, 3].unsqueeze(1)
 
@@ -223,10 +224,28 @@ if __name__ == "__main__":
     with open(args.split_filename, "r") as f:
         split = json.load(f)
 
-    npz_filenames, normalizationfiles = deep_sdf.data.get_instance_filenames(args.data_source, split)
+    pcd_filenames = []
+    for dataset in split:
+        for class_name in split[dataset]:
+            for instance_name in split[dataset][class_name]:
+                instance_filename = os.path.join(
+                    dataset, class_name, instance_name + ".obj"
+                )
+                if not os.path.isfile(
+                    os.path.join(args.data_source, r"pcd", instance_filename)
+                ):
+                    # raise RuntimeError(
+                    #     'Requested non-existent file "' + instance_filename + "'"
+                    # )
+                    logging.warning(
+                        "Requested non-existent file '{}'".format(instance_filename)
+                    )
+                pcd_filenames += [instance_filename]
+
 
     # random.shuffle(npz_filenames)
-    npz_filenames = sorted(npz_filenames)
+    pcd_filenames = sorted(pcd_filenames)
+
 
     logging.debug(decoder)
 
@@ -236,7 +255,7 @@ if __name__ == "__main__":
     rerun = 0
 
     reconstruction_dir = os.path.join(
-        args.experiment_directory, ws.reconstructions_subdir, str(saved_model_epoch)
+        args.experiment_directory, "pcd_reconstruct", str(saved_model_epoch)
     )
 
     if not os.path.isdir(reconstruction_dir):
@@ -271,32 +290,39 @@ if __name__ == "__main__":
                 decoder.forward_template, latent, template_filename, N=args.resolution, max_batch=int(2 ** 17),
             )
 
-    for ii, npz in enumerate(npz_filenames):
+    def pcd_to_sdf(pcd_filename):
+        mesh = trimesh.load(pcd_filename)
+        pcd = mesh.vertices
+        offset, scale = ComputeNormalizationParameters(pcd)
+        mesh_v = (pcd + offset) * scale
 
-        if "npz" not in npz:
-            continue
+        sdf = np.zeros([mesh_v.shape[0], 4])
+        sdf[:, 0:3] = mesh_v
 
-        full_filename = os.path.join(args.data_source, ws.sdf_samples_subdir, npz)
-        normalization_params_filename = normalizationfiles[ii]
-        normalization_params = np.load(normalization_params_filename)
+        return sdf, offset, scale
 
-        logging.debug("loading {}".format(npz))
+    for ii, pcd in enumerate(pcd_filenames):
 
-        data_sdf = deep_sdf.data.read_sdf_samples_into_ram(full_filename)
+        full_filename = os.path.join(args.data_source, "pcd", pcd)
+
+        logging.debug("loading {}".format(pcd))
+
+        data_sdf, offset, scale = pcd_to_sdf(full_filename)
+        data_sdf = torch.from_numpy(data_sdf.astype(np.float32))
 
         for k in range(repeat):
 
             if rerun > 1:
                 mesh_filename = os.path.join(
-                    reconstruction_meshes_dir, npz[:-4] + "-" + str(k + rerun)
+                    reconstruction_meshes_dir, pcd[:-4] + "-" + str(k + rerun)
                 )
                 latent_filename = os.path.join(
-                    reconstruction_codes_dir, npz[:-4] + "-" + str(k + rerun) + ".pth"
+                    reconstruction_codes_dir, pcd[:-4] + "-" + str(k + rerun) + ".pth"
                 )
             else:
-                mesh_filename = os.path.join(reconstruction_meshes_dir, npz[:-4])
+                mesh_filename = os.path.join(reconstruction_meshes_dir, pcd[:-4])
                 latent_filename = os.path.join(
-                    reconstruction_codes_dir, npz[:-4] + ".pth"
+                    reconstruction_codes_dir, pcd[:-4] + ".pth"
                 )
 
             if (
@@ -306,10 +332,9 @@ if __name__ == "__main__":
             ):
                 continue
 
-            logging.info("reconstructing {}".format(npz))
+            logging.info("reconstructing {}".format(pcd))
 
-            data_sdf[0] = data_sdf[0][torch.randperm(data_sdf[0].shape[0])]
-            data_sdf[1] = data_sdf[1][torch.randperm(data_sdf[1].shape[0])]
+            data_sdf = data_sdf[torch.randperm(data_sdf.shape[0])]
 
             start = time.time()
             if not os.path.isfile(latent_filename):
@@ -320,7 +345,7 @@ if __name__ == "__main__":
                     data_sdf,
                     0.01,  # [emp_mean,emp_var],
                     0.1,
-                    num_samples=8000,
+                    num_samples=data_sdf.shape[0],
                     lr=5e-3,
                     l2reg=True,
                 )
@@ -351,7 +376,7 @@ if __name__ == "__main__":
                     else:
                         deep_sdf.mesh.create_mesh(
                             decoder, latent, mesh_filename, N=args.resolution, max_batch=int(2 ** 17),
-                            offset=normalization_params["offset"], scale=normalization_params["scale"]
+                            offset=offset, scale=scale,
                         )
                 logging.debug("total time: {}".format(time.time() - start))
 

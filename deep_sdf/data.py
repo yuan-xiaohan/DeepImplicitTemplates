@@ -13,13 +13,18 @@ import tqdm
 import deep_sdf.workspace as ws
 
 
-def get_instance_filenames(data_source, split):
+def get_instance_filenames(data_source, split, normalized=True):
     npzfiles = []
+    normalizationfiles = []
     for dataset in split:
         for class_name in split[dataset]:
             for instance_name in split[dataset][class_name]:
                 instance_filename = os.path.join(
                     dataset, class_name, instance_name + ".npz"
+                )
+                if normalized:
+                    normalization_params_filename = os.path.join(
+                    data_source, "NormalizationParameters", dataset, class_name, instance_name + ".npz"
                 )
                 if not os.path.isfile(
                     os.path.join(data_source, ws.sdf_samples_subdir, instance_filename)
@@ -31,7 +36,8 @@ def get_instance_filenames(data_source, split):
                         "Requested non-existent file '{}'".format(instance_filename)
                     )
                 npzfiles += [instance_filename]
-    return npzfiles
+                normalizationfiles += [normalization_params_filename]
+    return npzfiles, normalizationfiles
 
 
 class NoMeshFileError(RuntimeError):
@@ -71,6 +77,7 @@ def read_sdf_samples_into_ram(filename):
 
 
 def unpack_sdf_samples(filename, subsample=None):
+    # Make positive and negative SDF equal
     npz = np.load(filename)
     if subsample is None:
         return npz
@@ -80,7 +87,7 @@ def unpack_sdf_samples(filename, subsample=None):
     # split the sample into half
     half = int(subsample / 2)
 
-    random_pos = (torch.rand(half) * pos_tensor.shape[0]).long()
+    random_pos = (torch.rand(half) * pos_tensor.shape[0]).long()  # random select half number of indexes
     random_neg = (torch.rand(half) * neg_tensor.shape[0]).long()
 
     sample_pos = torch.index_select(pos_tensor, 0, random_pos)

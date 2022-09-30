@@ -9,6 +9,7 @@ import os
 import torch
 import plyfile
 import sys
+import trimesh
 
 import deep_sdf
 import deep_sdf.workspace as ws
@@ -40,6 +41,25 @@ def save_to_ply(verts, verts_warped, faces, ply_filename_out):
     ply_data = plyfile.PlyData([el_verts, el_faces])
     logging.debug("saving mesh to %s" % (ply_filename_out))
     ply_data.write(ply_filename_out)
+
+def ComputeNormalizationParameters(vertices):
+    mesh = trimesh.Trimesh(vertices=vertices)
+    # points, face_indices = mesh.sample(10000000, return_index=True)
+    points = mesh.vertices
+    xMin = points[:, 0].min(axis=0)
+    yMin = points[:, 1].min(axis=0)
+    zMin = points[:, 2].min(axis=0)
+    xMax = points[:, 0].max(axis=0)
+    yMax = points[:, 1].max(axis=0)
+    zMax = points[:, 2].max(axis=0)
+    center = np.array([(xMax + xMin) / 2, (yMax + yMin) / 2, (zMax + zMin) / 2])
+
+    # center = mesh.bounding_box.centroid
+    vertices = mesh.vertices - center
+    distances = np.linalg.norm(vertices, axis=1)
+    maxDistance = np.max(distances)
+
+    return -1 * center, (1. / maxDistance)
 
 
 def mesh_to_correspondence(experiment_directory, checkpoint, start_id, end_id):
@@ -138,6 +158,11 @@ def mesh_to_correspondence(experiment_directory, checkpoint, start_id, end_id):
             mesh_v = np.asarray(mesh_v)
             mesh_f = np.asarray(mesh_f)
 
+            # Normalize before we feed the points into decoder!
+            offset, scale = ComputeNormalizationParameters(mesh_v)
+            mesh_v = (mesh_v + offset) * scale
+            mesh_v = mesh_v.astype(np.float32)
+
             queries = torch.from_numpy(mesh_v).cuda()
             num_samples = queries.shape[0]
             latent_repeat = latent_vector.expand(num_samples, -1)
@@ -155,8 +180,8 @@ def mesh_to_correspondence(experiment_directory, checkpoint, start_id, end_id):
 
             save_to_ply(mesh_v, warped, mesh_f, mesh_filename + "_color_coded.ply")
 
-        if i >= end_id:
-            break
+        # if i >= end_id:
+        #     break
 
 
 if __name__ == "__main__":
@@ -194,6 +219,9 @@ if __name__ == "__main__":
         default=20,
         help="end_id.",
     )
+    sys.argv = [r"generate_meshes_correspondence.py",
+                "--experiment", r"examples/cardiac"
+                ]
     deep_sdf.add_common_args(arg_parser)
 
     args = arg_parser.parse_args()

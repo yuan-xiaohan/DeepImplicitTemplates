@@ -96,7 +96,7 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
 
     specs = ws.load_experiment_specifications(experiment_directory)
 
-    logging.info("Experiment description: \n" + specs["Description"])
+    # logging.info("Experiment description: \n" + specs["Description"])
 
     # data_source = specs["DataSource"]
     train_split_file = specs["TrainSplit"]
@@ -176,7 +176,7 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
     logging.info("training with {} GPU(s)".format(torch.cuda.device_count()))
 
     # if torch.cuda.device_count() > 1:
-    decoder = torch.nn.DataParallel(decoder)
+    #     decoder = torch.nn.DataParallel(decoder)
 
     num_epochs = specs["NumEpochs"]
     log_frequency = get_spec_with_default(specs, "LogFrequency", 10)
@@ -210,7 +210,8 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
 
     logging.info(decoder)
 
-    lat_vecs = torch.nn.Embedding(num_scenes, latent_size, max_norm=code_bound)
+    # initialize latent vector for each sample
+    lat_vecs = torch.nn.Embedding(num_scenes, latent_size, max_norm=code_bound)  # Embedding: [num_scenes, latent_size]
     torch.nn.init.normal_(
         lat_vecs.weight.data,
         0.0,
@@ -231,11 +232,11 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
     optimizer_all = torch.optim.Adam(
         [
             {
-                "params": decoder.module.warper.parameters(),
+                "params": decoder.warper.parameters(),
                 "lr": lr_schedules[0].get_learning_rate(0),
             },
             {
-                "params": decoder.module.sdf_decoder.parameters(),
+                "params": decoder.sdf_decoder.parameters(),
                 "lr": lr_schedules[1].get_learning_rate(0),
             },
             {
@@ -332,10 +333,11 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
         adjust_learning_rate(lr_schedules, optimizer_all, epoch)
 
         batch_num = len(sdf_loader)
+        epoch_loss = []
         for bi, (sdf_data, indices) in enumerate(sdf_loader):
-
+            # sdf_data: [num_sdf_samples, 4], indices: [b, ]
             # Process the input data
-            sdf_data = sdf_data.reshape(-1, 4)
+            sdf_data = sdf_data.reshape(-1, 4)  # [num_sdf_samples, 4]
 
             num_sdf_samples = sdf_data.shape[0]
 
@@ -351,9 +353,10 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
             indices = torch.chunk(
                 indices.unsqueeze(-1).repeat(1, num_samp_per_scene).view(-1),
                 batch_split,
-            )
+            )  # batch_split=1: [b, ]->[b, 1]->[b, num_samp_per_scene]->[b*num_samp_per_scene=num_sdf_samples, ]
+            # ->chunk to tuple: [num_sdf_samples/batch_split, ]
 
-            sdf_gt = torch.chunk(sdf_gt, batch_split)
+            sdf_gt = torch.chunk(sdf_gt, batch_split)  # batch_split=1, chunk to tuple: [num_sdf_samples/batch_split, 1]
 
             batch_loss_sdf = 0.0
             batch_loss_pw = 0.0
@@ -365,12 +368,13 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
 
             for i in range(batch_split):
 
-                batch_vecs = lat_vecs(indices[i])
+                batch_vecs = lat_vecs(indices[i])  # [num_sdf_samples, latent_size]
 
-                input = torch.cat([batch_vecs, xyz[i]], dim=1)
+                input = torch.cat([batch_vecs, xyz[i]], dim=1).cuda()  # [num_sdf_samples, latent_size+3]
                 xyz_ = xyz[i].cuda()
 
                 # NN optimization
+                # warped_xyz_list: list:4 [num, 3], pred_sdf_list: list:4 [num, 1]
                 warped_xyz_list, pred_sdf_list, _ = decoder(
                     input, output_warped_points=True, output_warping_param=True)
 
@@ -421,6 +425,7 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
                 loss_pp=batch_loss_pp, loss_=batch_loss)
 
             loss_log.append(batch_loss)
+            epoch_loss.append(batch_loss)
 
             if grad_clip is not None:
 
@@ -432,6 +437,7 @@ def main_function(experiment_directory, data_source, continue_from, batch_split)
             del warped_xyz_list, pred_sdf_list, sdf_loss, pw_loss, \
                 lp_loss, batch_loss_sdf, batch_loss_reg, batch_loss_pp, batch_loss_pw, batch_loss, chunk_loss
 
+        print("loss = {}".format(sum(epoch_loss) / len(epoch_loss)))
         end = time.time()
 
         seconds_elapsed = end - start
@@ -501,6 +507,11 @@ if __name__ == "__main__":
         + "subbatches. This allows for training with large effective batch "
         + "sizes in memory constrained environments.",
     )
+    sys.argv = [r"train_deep_implicit_templates.py",
+                "--experiment", r"D:examples\cardiac",
+                "--data", r"data"
+                ]
+    args = arg_parser.parse_args()
 
     deep_sdf.add_common_args(arg_parser)
 

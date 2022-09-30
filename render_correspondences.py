@@ -1,6 +1,9 @@
+import os
+
 import numpy as np
 import trimesh
 import plyfile
+import deep_sdf.workspace as ws
 from pyrender import IntrinsicsCamera, DirectionalLight, Mesh, Scene, Viewer
 
 
@@ -39,7 +42,7 @@ def load_ply_data(mesh_path):
     return mesh_v, mesh_vc, mesh_f
 
 
-def main(mesh_path):
+def main(mesh_path, offset=None, scale=None):
     # rendering conf
     ambient_light = 0.8
     directional_light = 1.0
@@ -50,6 +53,8 @@ def main(mesh_path):
     scene = Scene(ambient_light=np.array([ambient_light, ambient_light, ambient_light, 1.0]))
 
     mesh_v, mesh_vc, mesh_f = load_ply_data(mesh_path)
+    if scale is not None and offset is not None:
+        mesh_v = (mesh_v + offset) * scale
     mesh_ = trimesh.Trimesh(vertices=mesh_v, faces=mesh_f, vertex_colors=mesh_vc)
     points_mesh = Mesh.from_trimesh(mesh_, smooth=True, material=None)
     mesh_node = scene.add(points_mesh)
@@ -110,7 +115,30 @@ def main(mesh_path):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input_path', required=True, type=str)
-    args = parser.parse_args()
-    main(args.input_path)
+    import sys
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('-i', '--input_path', required=True, type=str)
+    #
+    #
+    # sys.argv = [r"render_correspondences.py",
+    #             '-i', "examples/cardiac/TrainingMeshes/2000/template_color_coded.ply"
+    #             ]
+    # args = parser.parse_args()
+    # main(args.input_path)
+
+    main(os.path.join("examples/cardiac/TrainingMeshes/2000/template_color_coded.ply"))
+
+    ply_base = r"D:\XiaohanYuan\from_git\DeepImplicitTemplates\examples\cardiac\TrainingMeshes\2000\cardiac\phases\nor_ply"
+    para_base = r'D:\XiaohanYuan\from_git\DeepImplicitTemplates\examples\cardiac\TrainingMeshes\2000\cardiac\phases\normalization_params'
+    phase_list = os.listdir(para_base)
+
+    for i in [9]:
+        name = os.path.splitext(phase_list[i])[0]
+        normalization_params = np.load(os.path.join(para_base, name+".npz"))
+        offset = normalization_params["offset"]
+        scale = normalization_params["scale"]
+
+        print(os.path.join(ply_base, name+"_color_coded.ply"))
+        main(os.path.join(ply_base, name+"_color_coded.ply"))
+
+
